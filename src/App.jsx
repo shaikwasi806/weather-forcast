@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CloudRain, AlertCircle, Info, Wind, Droplets, Thermometer, MapPin, Search, Navigation, Settings, X, RefreshCw, Layers } from 'lucide-react';
+import {
+  CloudRain, AlertCircle, Info, Wind, Droplets, Thermometer,
+  MapPin, Search, Navigation, Settings, X, RefreshCw, Layers,
+  Compass, Eye, Cloud, Sun, Zap, Satellite, Terminal
+} from 'lucide-react';
 import { cn } from './lib/utils';
 
-// Original key provided by user (401 error observed)
 const DEFAULT_API_KEY = '34492e3cb3c0a2e5f567c98c1f89551f';
 
 function App() {
@@ -18,13 +21,22 @@ function App() {
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [historicalDate, setHistoricalDate] = useState('');
   const [useHistorical, setUseHistorical] = useState(false);
+  const [recentSearches, setRecentSearches] = useState(() => JSON.parse(localStorage.getItem('skycast_recent') || '[]'));
+
+  const getThemeClass = useCallback(() => {
+    if (!weatherData) return 'theme-default';
+    const desc = weatherData.current.weather_descriptions[0].toLowerCase();
+    if (desc.includes('sun') || desc.includes('clear')) return 'theme-sunny';
+    if (desc.includes('cloud') || desc.includes('overcast')) return 'theme-cloudy';
+    if (desc.includes('rain') || desc.includes('drizzle')) return 'theme-rainy';
+    return 'theme-default';
+  }, [weatherData]);
 
   const fetchWeather = useCallback(async (query) => {
     if (!query) return;
     setLoading(true);
     setError(null);
 
-    // Auto-fix common spelling in the query
     let searchCity = query.trim().toLowerCase();
     if (searchCity === 'banglore') searchCity = 'bangalore';
 
@@ -32,9 +44,6 @@ function App() {
       const endpoint = useHistorical && historicalDate ? 'historical' : 'current';
       const cleanKey = apiKey.trim();
       const url = `http://api.weatherstack.com/${endpoint}`;
-
-      console.log(`[SKYCAST_DEBUG] Dialing atmospheric station: ${url}`);
-      console.log(`[SKYCAST_DEBUG] Query: ${searchCity}`);
 
       const response = await axios.get(url, {
         params: {
@@ -48,43 +57,39 @@ function App() {
         }
       });
 
-      console.log('[SKYCAST_DEBUG] Link Establish Success:', response.data);
-
       if (response.data.success === false) {
         const errorMsg = response.data.error.info || response.data.error.type || 'City not found or API error.';
-        setError(`STATION_RESPONSE: ${errorMsg}`);
+        const errorCode = response.data.error.code;
+
+        if (errorCode === 601 || errorCode === 602 || errorCode === 603 || errorCode === 604) {
+          setError(`PREMIUM_RECOVERY: Historical logs unavailable on basic tier. Syncing live feed...`);
+          setUseHistorical(false);
+          setTimeout(() => fetchWeather(searchCity), 2000);
+        } else {
+          setError(`STATION_RESPONSE: ${errorMsg}`);
+        }
         setWeatherData(null);
       } else {
         setWeatherData(response.data);
         setLastUpdated(new Date().toLocaleTimeString());
+        const newRecent = [response.data.location.name, ...recentSearches.filter(c => c !== response.data.location.name)].slice(0, 5);
+        setRecentSearches(newRecent);
+        localStorage.setItem('skycast_recent', JSON.stringify(newRecent));
       }
     } catch (err) {
-      console.error('[SKYCAST_DEBUG] Critical Link Failure:', err);
-      const serverMsg = err.response?.data?.error?.info || err.response?.data?.error?.type;
-
-      if (err.response?.status === 401) {
-        setError(`DENIED (401): API key is invalid/expired. Check your WeatherStack account.`);
-      } else if (err.response?.status === 400) {
-        setError(`MALFORMED (400): The server rejected the request structure. Ensure the API key is active.`);
-      } else if (err.code === 'ERR_NETWORK') {
-        setError('UPSTREAM_FAILURE: WeatherStack Free only supports HTTP. Ensure you are visiting http://localhost:5173 (not https).');
-      } else {
-        setError(`INTERFACE_ERROR: ${serverMsg || err.message}`);
-      }
+      if (err.response?.status === 401) setError(`ACCESS_DENIED: Invalid authentication key.`);
+      else if (err.code === 'ERR_NETWORK') setError('PROTOCOL_ERROR: WeatherStack requires HTTP entry. Access denied over HTTPS.');
+      else setError(`INTERFACE_ERROR: ${err.message}`);
       setWeatherData(null);
     } finally {
       setLoading(false);
     }
-  }, [apiKey, useHistorical, historicalDate]);
+  }, [apiKey, useHistorical, historicalDate, recentSearches]);
 
-  // Handle Auto-Refresh
   useEffect(() => {
     let interval;
     if (autoRefresh && weatherData) {
-      interval = setInterval(() => {
-        const query = weatherData.location.name;
-        fetchWeather(query);
-      }, 300000); // 5 minutes
+      interval = setInterval(() => fetchWeather(weatherData.location.name), 300000);
     }
     return () => clearInterval(interval);
   }, [autoRefresh, weatherData, fetchWeather]);
@@ -92,369 +97,326 @@ function App() {
   const getUserLocation = () => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        (position) => {
-          fetchWeather(`${position.coords.latitude},${position.coords.longitude}`);
-        },
-        () => setError('Location access denied. Please enter city manually.')
+        (pos) => fetchWeather(`${pos.coords.latitude},${pos.coords.longitude}`),
+        () => setError('Location protocol failed. Manual entry required.')
       );
     }
   };
 
-  const saveApiKey = (newKey) => {
-    setApiKey(newKey);
-    localStorage.setItem('skycast_api_key', newKey);
-    setShowSettings(false);
-    setError(null);
-  };
+  const getLogoClass = useCallback(() => {
+    if (!weatherData) return '';
+    const desc = weatherData.current.weather_descriptions[0].toLowerCase();
+    if (desc.includes('sun') || desc.includes('clear')) return 'logo-glow-sunny';
+    if (desc.includes('rain') || desc.includes('drizzle')) return 'logo-glow-rainy';
+    if (desc.includes('cloud') || desc.includes('overcast')) return 'logo-glow-cloudy';
+    return '';
+  }, [weatherData]);
 
   return (
-    <div className="relative min-h-screen text-white font-sans selection:bg-blue-500/30 overflow-hidden">
-      <div className="mesh-bg" />
+    <div className="relative min-h-screen text-white font-sans selection:bg-indigo-500/30 overflow-hidden bg-[#020617]">
+      <div className={cn("mesh-bg transition-opacity duration-1000", getThemeClass())}>
+        <div className="lava-orb orb-1" />
+        <div className="lava-orb orb-2" />
+      </div>
 
-      <main className="container mx-auto px-4 pt-12 pb-24 max-w-6xl relative z-10">
-        {/* Top Actions */}
-        <div className="absolute top-0 right-0 p-8 flex gap-4">
-          <button
-            onClick={() => setShowSettings(true)}
-            className="p-3 glass rounded-2xl hover:bg-white/10 transition-all text-blue-200"
-            title="API Settings"
-          >
-            <Settings className="w-6 h-6" />
-          </button>
+      <nav className="fixed top-0 left-0 right-0 z-50 px-6 py-4 flex justify-between items-center backdrop-blur-xl bg-black/20 border-b border-white/5">
+        <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="flex items-center gap-3">
+          <div className={cn("p-2 glass rounded-xl shadow-lg", getLogoClass())}>
+            <Zap className="w-5 h-5 text-indigo-400" />
+          </div>
+          <span className="text-xl font-black tracking-tighter uppercase italic text-aurora">Aurora Night</span>
+        </motion.div>
+
+        <div className="flex items-center gap-4">
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-indigo-500/10 rounded-full border border-indigo-500/20 text-[9px] font-black tracking-widest text-indigo-300 uppercase">
+            <Satellite size={10} className="animate-pulse" />
+            Active Satellite Uplink
+          </div>
+          <motion.button whileHover={{ rotate: 90 }} onClick={() => setShowSettings(true)} className="p-2.5 glass rounded-xl text-indigo-200 border-white/10 hover:bg-white/10 transition-all">
+            <Settings className="w-5 h-5" />
+          </motion.button>
         </div>
+      </nav>
 
-        {/* Header */}
-        <header className="flex flex-col items-center mb-16">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="flex items-center gap-5 mb-6"
+      <main className="container mx-auto px-4 pt-32 pb-24 max-w-6xl relative z-10">
+        <header className="flex flex-col items-center mb-16 text-center">
+          <motion.h1
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="text-6xl md:text-8xl font-black tracking-tighter text-gradient leading-none mb-4"
           >
-            <div className="p-5 glass shadow-2xl animate-float bg-blue-500/10">
-              <CloudRain className="w-14 h-14 text-blue-400" />
-            </div>
-            <h1 className="text-7xl font-black tracking-tighter text-gradient pb-2">
-              SkyCast
-            </h1>
-          </motion.div>
-          <motion.p
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.2 }}
-            className="text-blue-200/50 text-xl font-medium"
-          >
-            Professional real-time atmospheric insights.
+            SkyCast<span className="text-indigo-400">.</span>
+          </motion.h1>
+          <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="text-indigo-200/50 text-[10px] font-black tracking-[0.6em] uppercase italic">
+            Precision Atmospheric Matrix
           </motion.p>
         </header>
 
-        {/* Search Section */}
-        <section className="max-w-3xl mx-auto mb-16 space-y-4">
-          <div className="flex justify-center gap-4 mb-2">
-            <button
+        <section className="max-w-4xl mx-auto mb-28 space-y-12">
+          <div className="flex flex-wrap justify-center gap-4">
+            <motion.button
+              whileHover={{ scale: 1.05, y: -2 }}
+              whileTap={{ scale: 0.95 }}
               onClick={() => setUseHistorical(!useHistorical)}
               className={cn(
-                "px-6 py-2 rounded-2xl text-xs font-black tracking-[0.2em] transition-all border flex items-center gap-2",
-                useHistorical
-                  ? "bg-blue-500/20 border-blue-500 text-blue-300 shadow-[0_0_20px_rgba(59,130,246,0.2)]"
-                  : "bg-white/5 border-white/10 text-white/30"
+                "px-8 py-3 rounded-[2rem] text-[11px] font-black tracking-[0.2em] transition-all border flex items-center gap-3 uppercase",
+                useHistorical ? "bg-indigo-600/30 border-indigo-400 text-indigo-100 shadow-[0_0_30px_rgba(99,102,241,0.3)]" : "bg-white/5 border-white/5 text-white/30"
               )}
             >
-              <div className={cn("w-2 h-2 rounded-full", useHistorical ? "bg-blue-400 animate-pulse" : "bg-white/20")} />
-              HISTORICAL_MODE: {useHistorical ? 'ACTIVE' : 'OFF'}
-            </button>
+              <Terminal size={14} className={useHistorical ? "text-indigo-400" : "text-white/20"} />
+              {useHistorical ? 'Archive Access Active' : 'Access Atmospheric Logs'}
+            </motion.button>
+            {recentSearches.map((c, i) => (
+              <motion.button
+                key={c}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1 * i }}
+                onClick={() => fetchWeather(c)}
+                className="px-8 py-3 rounded-[2rem] text-[11px] font-black tracking-[0.2em] bg-white/5 hover:bg-indigo-500/10 border border-white/5 transition-all text-white/30 hover:text-indigo-200 uppercase"
+              >
+                {c}
+              </motion.button>
+            ))}
           </div>
 
-          <div className="relative group input-focus-glow transition-all duration-500 rounded-[2rem]">
-            <div className="absolute -inset-1 bg-gradient-to-r from-blue-600/30 to-cyan-500/30 rounded-[2rem] blur-xl opacity-0 group-hover:opacity-100 transition duration-1000"></div>
-            <div className="relative flex flex-col md:flex-row items-center gap-3 p-3 glass rounded-[1.8rem]">
-              <div className="flex-1 flex items-center px-5 gap-4 w-full">
-                <Search className="text-white/20 w-6 h-6 shrink-0" />
+          <div className="relative group input-glow transition-all duration-1000">
+            <div className="absolute -inset-2 bg-gradient-to-r from-indigo-600/20 via-sky-400/10 to-indigo-600/20 rounded-[4rem] blur-[80px] opacity-0 group-hover:opacity-100 transition duration-1000"></div>
+            <div className="relative flex flex-col md:flex-row items-center gap-3 p-3 glass rounded-[3.5rem]">
+              <div className="flex-1 flex items-center px-8 gap-6 w-full">
+                <Search className="text-indigo-400/40 w-8 h-8 shrink-0" />
                 <input
                   type="text"
                   value={city}
                   onChange={(e) => setCity(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && fetchWeather(city)}
-                  placeholder="Search city... (e.g. London)"
-                  className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-white/20 py-4 text-xl outline-none"
+                  placeholder="Initiate atmospheric coordinate search..."
+                  className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-white/20 py-6 text-2xl outline-none font-bold tracking-tight"
                 />
               </div>
 
-              {useHistorical && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="flex items-center gap-3 px-4 py-2 bg-blue-500/10 rounded-2xl border border-blue-500/20"
-                >
-                  <label className="text-[10px] font-black text-blue-400 uppercase tracking-widest shrink-0">Target Date</label>
-                  <input
-                    type="date"
-                    value={historicalDate}
-                    onChange={(e) => setHistoricalDate(e.target.value)}
-                    className="bg-transparent text-white text-sm font-bold outline-none [color-scheme:dark]"
-                  />
-                </motion.div>
-              )}
-
-              <div className="flex gap-2 mr-2 w-full md:w-auto">
-                <button
-                  onClick={getUserLocation}
-                  className="p-4 glass rounded-2xl hover:bg-white/10 transition-colors text-blue-300"
-                  title="Current location"
-                >
-                  <Navigation className="w-6 h-6" />
+              <div className="flex gap-3 w-full md:w-auto p-2">
+                {useHistorical && (
+                  <div className="flex items-center gap-4 px-8 py-5 bg-indigo-600/10 rounded-[2.5rem] border border-indigo-400/20 shrink-0">
+                    <input type="date" value={historicalDate} onChange={(e) => setHistoricalDate(e.target.value)} className="bg-transparent text-white text-sm font-black outline-none [color-scheme:dark]" />
+                  </div>
+                )}
+                <button onClick={getUserLocation} className="p-6 glass rounded-[2.5rem] hover:bg-indigo-500/10 transition-all text-indigo-300" title="Locate Coordinates">
+                  <Navigation className="w-8 h-8" />
                 </button>
                 <button
                   onClick={() => fetchWeather(city)}
                   disabled={loading || (useHistorical && !historicalDate)}
-                  className="flex-1 md:flex-none px-10 py-4 bg-blue-600 hover:bg-blue-500 text-white font-black text-lg rounded-2xl transition-all shadow-xl active:scale-95 disabled:opacity-50 flex items-center justify-center gap-3"
+                  className="flex-1 md:flex-none px-16 py-6 bg-gradient-to-r from-indigo-600 to-indigo-400 hover:from-indigo-500 hover:to-indigo-300 text-white font-black text-xl rounded-[2.5rem] transition-all shadow-2xl active:scale-95 disabled:opacity-50 flex items-center justify-center gap-5 uppercase tracking-tighter"
                 >
-                  {loading ? <RefreshCw className="w-6 h-6 animate-spin" /> : 'EXPLORE'}
+                  {loading ? <RefreshCw className="animate-spin w-7 h-7" /> : <><RefreshCw className="w-6 h-6" /> Sync</>}
                 </button>
               </div>
             </div>
           </div>
         </section>
 
-        {/* Content Section */}
         <AnimatePresence mode="wait">
           {error && (
             <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="max-w-xl mx-auto p-8 glass border-red-500/30 bg-red-500/5 rounded-[2.5rem] flex items-center gap-6 text-red-100 mb-12"
+              initial={{ opacity: 0, scale: 0.9, y: 30 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="max-w-2xl mx-auto p-12 glass border-red-500/20 bg-red-500/5 rounded-[3.5rem] flex items-start gap-10 text-red-100 mb-20 relative overflow-hidden group shadow-2xl"
             >
-              <div className="p-4 bg-red-500/10 rounded-3xl text-red-400">
-                <AlertCircle className="w-8 h-8" />
+              <div className="p-6 bg-red-500/10 rounded-[2.5rem] text-red-400 shadow-inner">
+                <AlertCircle className="w-12 h-12" />
               </div>
-              <div>
-                <h4 className="font-black text-xl mb-1 italic">SYSTEM ERROR</h4>
-                <p className="text-lg opacity-70 leading-tight">{error}</p>
-                {error.includes('Key') && (
-                  <button
-                    onClick={() => setShowSettings(true)}
-                    className="mt-3 text-sm font-bold border-b border-red-400/50 hover:border-red-400 transition-colors"
-                  >
-                    UPDATE API KEY
-                  </button>
-                )}
+              <div className="space-y-3">
+                <h4 className="font-black text-[11px] tracking-[0.4em] uppercase text-red-400/60 italic">Critical System Failure</h4>
+                <p className="text-2xl font-bold leading-tight selection:bg-red-500/30">{error}</p>
               </div>
             </motion.div>
           )}
 
-          {weatherData ? (
-            <WeatherDashboard
-              data={weatherData}
-              lastUpdated={lastUpdated}
-              autoRefresh={autoRefresh}
-              setAutoRefresh={setAutoRefresh}
-              onRefresh={() => fetchWeather(weatherData.location.name)}
-              isLoading={loading}
-            />
-          ) : !loading && !error && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-center py-24"
-            >
-              <div className="w-32 h-32 bg-blue-600/5 rounded-[2.5rem] flex items-center justify-center mx-auto mb-10 border border-white/5 shadow-inner">
-                <Layers className="text-blue-400/40 w-16 h-16" />
-              </div>
-              <h3 className="text-4xl font-black mb-4 tracking-tight">STATION STANDBY</h3>
-              <p className="text-blue-100/30 text-xl font-medium max-w-md mx-auto">Enter global coordinates or city name to establish atmospheric connection.</p>
-            </motion.div>
-          )}
+          {weatherData ? <WeatherDashboard data={weatherData} lastUpdated={lastUpdated} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} onRefresh={() => fetchWeather(weatherData.location.name)} isLoading={loading} /> : !loading && !error && <StationStandby />}
         </AnimatePresence>
       </main>
 
-      {/* Settings Modal */}
-      <AnimatePresence>
-        {showSettings && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-md">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="glass p-10 max-w-2xl w-full border-blue-500/20 shadow-[0_0_100px_rgba(30,58,138,0.5)]"
-            >
-              <div className="flex justify-between items-center mb-8">
-                <h2 className="text-3xl font-black italic tracking-tighter">API CONFIGURATION</h2>
-                <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-white/5 rounded-xl transition-colors">
-                  <X />
-                </button>
-              </div>
-
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-blue-200/50 font-bold uppercase tracking-widest text-sm mb-3">WeatherStack Access Key</label>
-                  <div className="flex gap-3">
-                    <input
-                      type="text"
-                      defaultValue={apiKey}
-                      id="key-input"
-                      className="flex-1 bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-lg outline-none focus:border-blue-500/50 transition-colors"
-                      placeholder="Paste your API key here..."
-                    />
-                    <button
-                      onClick={() => saveApiKey(document.getElementById('key-input').value)}
-                      className="px-8 py-4 bg-blue-600 hover:bg-blue-500 rounded-2xl font-black text-sm uppercase tracking-widest transition-all"
-                    >
-                      SAVE
-                    </button>
-                  </div>
-                  <p className="mt-4 text-white/30 text-sm leading-relaxed">
-                    Get your key at <a href="https://weatherstack.com" target="_blank" className="text-blue-400 underline italic">weatherstack.com</a>. Free keys only work over HTTP.
-                  </p>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      <footer className="fixed bottom-8 w-full text-center pointer-events-none opacity-20 hover:opacity-100 transition-opacity">
-        <p className="text-white text-[10px] font-mono uppercase tracking-[0.6em]">
-          DATA_FEED: WEATHERSTACK &bull; CORE_SYSTEM: SKYCAST_v4.2.1
-        </p>
+      <footer className="fixed bottom-0 left-0 right-0 p-12 flex justify-between items-center pointer-events-none">
+        <div className="opacity-20 flex items-center gap-4 text-[10px] font-bold tracking-[0.6em] uppercase">
+          <div className="w-12 h-[1px] bg-white" />
+          V5.0 AURORA PROTOCOL
+        </div>
+        <div className="opacity-20 text-[10px] font-bold tracking-[0.6em] uppercase">
+          LATENCY: {lastUpdated ? '0.04ms' : 'OFFLINE'}
+        </div>
       </footer>
+
+      <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} apiKey={apiKey} onSave={(key) => { setApiKey(key); localStorage.setItem('skycast_api_key', key); setShowSettings(false); }} />
     </div>
   );
 }
 
+function StationStandby() {
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-40">
+      <div className="w-48 h-48 bg-indigo-600/5 rounded-[5rem] flex items-center justify-center mx-auto mb-16 border border-indigo-500/10 shadow-2xl relative animate-float">
+        <div className="absolute inset-0 bg-indigo-500/5 blur-[100px] rounded-full" />
+        <Satellite className="text-indigo-400/20 w-24 h-24" />
+      </div>
+      <h3 className="text-6xl font-black mb-8 tracking-tighter text-gradient">System Idle</h3>
+      <p className="text-indigo-200/30 text-2xl font-bold max-w-xl mx-auto leading-relaxed italic">The atmospheric matrix is awaiting a manual handshake. Connect to the global satellite network to establish a neural downlink.</p>
+    </motion.div>
+  );
+}
+
 function WeatherDashboard({ data, lastUpdated, autoRefresh, setAutoRefresh, onRefresh, isLoading }) {
-  const { location, current } = data;
+  const { location, current, historical } = data;
+  const isHistorical = !!historical;
+  const targetData = isHistorical ? Object.values(historical)[0] : current;
 
   return (
-    <div className="space-y-8">
-      {/* Dynamic Header Tooltip */}
-      <div className="flex justify-between items-center px-4">
-        <div className="flex items-center gap-3 text-blue-400/60 font-mono text-sm">
-          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-          SYSTEM_SYNC: ACTIVE &bull; UPDATED: {lastUpdated}
-        </div>
-        <div className="flex gap-4">
-          <button
-            onClick={() => setAutoRefresh(!autoRefresh)}
-            className={cn(
-              "px-4 py-2 rounded-xl text-xs font-black transition-all border",
-              autoRefresh ? "bg-blue-500/20 border-blue-500 text-blue-300" : "bg-white/5 border-white/10 text-white/40"
-            )}
-          >
-            AUTO_REFRESH: {autoRefresh ? 'ON' : 'OFF'}
-          </button>
-          <button
-            onClick={onRefresh}
-            disabled={isLoading}
-            className="p-2 glass rounded-xl hover:bg-white/10 transition-all disabled:opacity-50"
-          >
-            <RefreshCw size={18} className={cn(isLoading && "animate-spin")} />
-          </button>
-        </div>
-      </div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="grid grid-cols-1 lg:grid-cols-4 gap-8"
-      >
-        {/* Main Status Block */}
-        <div className="lg:col-span-3 glass p-12 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-[400px] h-[400px] bg-blue-500/10 blur-[120px] -mr-48 -mt-48 transition-all duration-1000 group-hover:bg-blue-500/20" />
+    <motion.div initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} className="space-y-16">
+      <div className="flex flex-col lg:flex-row gap-16">
+        <div className="flex-1 glass p-10 md:p-14 rounded-[3rem] relative overflow-hidden group shadow-[0_30px_60px_-15px_rgba(0,0,0,0.5)] border-white/10">
+          <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-indigo-500/10 blur-[150px] -mr-48 -mt-48" />
 
           <div className="relative z-10">
-            <div className="flex flex-col md:flex-row md:items-start justify-between gap-10 mb-16">
-              <div>
-                <div className="flex items-center gap-3 text-blue-400 mb-4">
-                  <MapPin size={24} className="animate-bounce" />
-                  <span className="text-lg font-black uppercase tracking-[0.3em] italic">{location.region || location.country}</span>
+            <div className="flex flex-col lg:flex-row justify-between items-start gap-10 mb-12">
+              <div className="space-y-6 flex-1 max-w-full">
+                <div className="inline-flex items-center gap-3 px-5 py-2 glass rounded-full text-indigo-300 border border-indigo-400/30">
+                  <MapPin size={18} className="animate-bounce" />
+                  <span className="text-sm font-black uppercase tracking-[0.4em] italic">{location.region || location.country}</span>
                 </div>
-                <h2 className="text-8xl md:text-9xl font-black mb-2 tracking-tighter leading-none">{location.name}</h2>
-                <p className="text-2xl text-blue-100/30 font-bold italic">LOCAL_OBSERVATION: {location.localtime}</p>
-              </div>
 
-              <div className="flex items-center gap-10">
-                <div className="text-right">
-                  <div className="text-[10rem] md:text-[12rem] font-black tracking-tighter flex leading-none text-gradient drop-shadow-2xl">
-                    {current.temperature}
-                    <span className="text-5xl md:text-6xl mt-8 font-light text-blue-400 opacity-50">°</span>
+                <div className="flex flex-col gap-2">
+                  <h2 className={cn(
+                    "font-black tracking-tighter leading-none text-aurora break-words",
+                    location.name.length > 15 ? "text-5xl md:text-6xl" : "text-7xl md:text-8xl"
+                  )}>{location.name}</h2>
+
+                  <div className="flex items-center gap-6 mt-4 md:mt-0">
+                    <div className="text-[6rem] md:text-[8rem] font-black tracking-tighter leading-none text-gradient flex items-start drop-shadow-2xl">
+                      {targetData.temperature}
+                      <span className="text-4xl md:text-6xl mt-4 font-light text-indigo-300/40 ml-2">°</span>
+                    </div>
+                    <div className="border-l-2 border-indigo-500/20 pl-6 self-center">
+                      <p className="text-2xl md:text-4xl font-black text-indigo-100 uppercase tracking-tight italic">
+                        {targetData.weather_descriptions?.[0]}
+                      </p>
+                      <p className="text-[10px] font-black text-indigo-300/40 uppercase tracking-[0.4em] mt-2">
+                        {isHistorical ? `Atmospheric Log: ${Object.keys(historical)[0]}` : `Uplink Sync: ${location.localtime}`}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-3xl font-black text-blue-200 uppercase tracking-[0.2em] italic -mt-6">{current.weather_descriptions[0]}</p>
-                </div>
-                <div className="relative">
-                  <div className="absolute inset-0 bg-blue-400/20 blur-3xl rounded-full" />
-                  <img
-                    src={current.weather_icons[0]}
-                    className="w-48 h-48 rounded-[3rem] border-8 border-white/5 shadow-2xl animate-float relative z-10"
-                    alt="weather icon"
-                  />
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-8">
-              <Metric label="Apparent" value={`${current.feelslike}°`} icon={<Thermometer />} />
-              <Metric label="Saturation" value={`${current.humidity}%`} icon={<Droplets />} />
-              <Metric label="Velocity" value={`${current.wind_speed}`} unit="km/h" icon={<Wind />} />
-              <Metric label="Barometer" value={`${current.pressure}`} unit="mb" icon={<Layers />} />
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+              <Metric label=" थर्मल (Thermal)" value={`${targetData.feelslike || targetData.temperature}°`} icon={<Thermometer />} />
+              <Metric label=" नमी (Humidity)" value={`${targetData.humidity}%`} icon={<Droplets />} />
+              <Metric label=" हवा (Wind)" value={targetData.wind_speed} unit="KM/H" icon={<Wind />} />
+              <Metric label=" दबाव (Pressure)" value={targetData.pressure} unit="MB" icon={<Layers />} />
             </div>
           </div>
         </div>
 
-        {/* Secondary Telemetry */}
-        <div className="flex flex-col gap-8">
-          <div className="glass p-10 flex-1 border-white/5 relative bg-gradient-to-b from-white/5 to-transparent">
-            <h4 className="text-xl font-black mb-8 flex items-center gap-3 italic tracking-tight">
-              <span className="w-1.5 h-6 bg-blue-500 rounded-full" />
-              ANALYTICS
+        <div className="w-full lg:w-[400px] space-y-8">
+          <AIAdvice data={targetData} />
+
+          <div className="glass p-10 rounded-[3rem] relative overflow-hidden border-white/10">
+            <h4 className="text-[9px] font-black mb-10 flex items-center gap-4 italic tracking-[0.5em] uppercase text-indigo-300">
+              <Compass size={16} className="text-indigo-400 animate-spin-slow" />
+              Satellite Telemetry
             </h4>
-            <div className="space-y-6">
-              <TelemetryRow label="Wind Heading" value={current.wind_dir} />
-              <TelemetryRow label="Radiation" value={`${current.uv_index} UV`} />
-              <TelemetryRow label="Visibility Range" value={`${current.visibility} km`} />
-              <TelemetryRow label="Fallout Ratio" value={`${current.precip} mm`} />
-              <TelemetryRow label="Solar Flux" value={current.observation_time} />
+            <div className="space-y-3">
+              <TelemetryRow label="Wind Dir" value={targetData.wind_dir || '---'} />
+              <TelemetryRow label="UV Index" value={`${targetData.uv_index || 0} UV`} />
+              <TelemetryRow label="Visibility" value={`${targetData.visibility || 0} KM`} />
+              <TelemetryRow label="Cloud Cover" value={`${targetData.cloudcover || 0}%`} />
+              <TelemetryRow label="Precip" value={`${targetData.precip || 0} MM`} />
             </div>
           </div>
-
-          <motion.div
-            whileHover={{ scale: 1.02 }}
-            className="glass-morphism p-10 bg-gradient-to-br from-blue-600/30 via-blue-800/10 to-transparent border-blue-400/20 shadow-lg"
-          >
-            <p className="text-xs font-black mb-4 uppercase tracking-[0.3em] text-blue-400 flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-blue-400" />
-              Intelligent Advice
-            </p>
-            <p className="text-xl font-bold text-blue-50 leading-tight italic">
-              {current.temperature > 25 ? "Thermal levels elevated. Optimize hydration and seek cooling station." :
-                current.temperature < 15 ? "Cooler atmospheric shift detected. External thermal layering advised." :
-                  "Optimal equilibrium maintained. External conditions are favorable."}
-            </p>
-          </motion.div>
         </div>
-      </motion.div>
-    </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function AIAdvice({ data }) {
+  const getAdvice = () => {
+    if (data.temperature > 32) return "CORE ALERT: Critical thermal surge detected. Solar intensity at peak thresholds. Seek climate-shielded environments immediately.";
+    if (data.temperature < 10) return "THERMAL WARNING: Environment cooling rapidly. Kinetic output will be reduced. Initiate progressive thermal insulation protocols.";
+    if (data.wind_speed > 30) return "KINETIC NOTICE: High-velocity atmospheric currents active. Secure all external structural elements. Flight paths restricted.";
+    if (data.humidity > 80) return "SATURATION ALERT: Extreme moisture density. Interface precision may be compromised by heavy oxidation.";
+    return "STABILITY ACHIEVED: Atmospheric equilibrium established. Nominal conditions for prolonged external deployment and primary operations.";
+  };
+
+  return (
+    <motion.div
+      whileHover={{ scale: 1.02, y: -5 }}
+      className="glass-light p-10 rounded-[3rem] relative overflow-hidden group shadow-2xl border-white/20"
+    >
+      <div className="absolute top-0 right-0 p-6 text-indigo-900/10 transition-transform group-hover:scale-110"><Zap size={48} /></div>
+      <div className="flex items-center gap-4 mb-8">
+        <div className="p-2.5 bg-indigo-600 rounded-xl text-white shadow-xl">
+          <Eye size={16} />
+        </div>
+        <span className="text-[10px] font-black uppercase tracking-[0.4em] text-indigo-600 font-mono">Neural Interface</span>
+      </div>
+      <p className="text-2xl font-bold text-slate-900 leading-snug italic font-serif">
+        "{getAdvice()}"
+      </p>
+      <div className="mt-8 h-1.5 bg-indigo-100/50 rounded-full overflow-hidden">
+        <motion.div initial={{ x: '-100%' }} animate={{ x: '100%' }} transition={{ repeat: Infinity, duration: 4, ease: "linear" }} className="w-1/3 h-full bg-indigo-600" />
+      </div>
+    </motion.div>
   );
 }
 
 function Metric({ label, value, unit, icon }) {
   return (
-    <div className="p-8 glass-morphism rounded-[2rem] hover:bg-white/10 transition-all border-white/5 group relative overflow-hidden">
-      <div className="text-blue-400/40 mb-5 scale-125 transition-transform group-hover:scale-150 group-hover:text-blue-400">{icon}</div>
-      <p className="text-xs font-black text-white/20 uppercase tracking-[0.2em] mb-2">{label}</p>
-      <p className="text-4xl font-black tracking-tighter">
+    <div className="p-6 metric-card rounded-3xl border border-white/10 relative overflow-hidden group text-left bg-indigo-500/10 backdrop-blur-3xl">
+      <div className="text-indigo-300 mb-5 group-hover:scale-110 transition-transform duration-500">
+        {React.cloneElement(icon, { size: 28 })}
+      </div>
+      <p className="text-[9px] font-black text-indigo-100/60 uppercase tracking-[0.3em] mb-3">{label}</p>
+      <p className="text-4xl font-black tracking-tight text-white drop-shadow-lg">
         {value}
-        {unit && <span className="text-sm font-bold text-white/30 ml-2 italic">{unit}</span>}
+        {unit && <span className="text-[10px] font-black text-indigo-300/40 ml-2 tracking-widest font-mono">{unit}</span>}
       </p>
-      <div className="absolute -bottom-2 -right-2 w-12 h-12 bg-blue-500/5 blur-xl group-hover:bg-blue-500/20 transition-all" />
     </div>
   );
 }
 
 function TelemetryRow({ label, value }) {
   return (
-    <div className="flex justify-between items-center py-3 border-b border-white/5 hover:border-blue-500/30 transition-colors group">
-      <span className="text-white/30 text-xs font-bold uppercase tracking-widest group-hover:text-white/60">{label}</span>
-      <span className="font-black text-lg text-blue-100 italic">{value}</span>
+    <div className="telemetry-row group">
+      <span className="text-white/10 text-[10px] font-bold uppercase tracking-[0.3em] group-hover:text-indigo-400 transition-colors">{label}</span>
+      <span className="font-black text-2xl text-white italic tracking-tighter group-hover:text-indigo-200">{value}</span>
+    </div>
+  );
+}
+
+function SettingsModal({ isOpen, onClose, apiKey, onSave }) {
+  const [val, setVal] = useState(apiKey);
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/95 backdrop-blur-2xl">
+      <motion.div initial={{ opacity: 0, scale: 0.9, y: 50 }} animate={{ opacity: 1, scale: 1, y: 0 }} className="glass p-20 max-w-2xl w-full border border-indigo-500/20 shadow-[0_0_150px_-20px_rgba(99,102,241,0.2)] rounded-[5rem] relative overflow-hidden">
+        <div className="absolute -top-20 -right-20 w-80 h-80 bg-indigo-500/10 blur-[120px] rounded-full" />
+        <div className="flex justify-between items-center mb-20">
+          <h2 className="text-4xl font-black italic tracking-tighter uppercase text-gradient">Handshake Protocol</h2>
+          <button onClick={onClose} className="p-4 hover:bg-white/5 rounded-3xl transition-all border border-white/5"><X size={24} /></button>
+        </div>
+        <div className="space-y-16">
+          <div className="space-y-8">
+            <label className="block text-indigo-200/40 font-black uppercase tracking-[0.6em] text-[11px] mb-2 pl-6">Neural Identity Key</label>
+            <div className="flex gap-6 p-3 glass-morphism rounded-[3rem] border border-white/10 input-glow transition-all">
+              <input type="text" value={val} onChange={(e) => setVal(e.target.value)} className="flex-1 bg-transparent px-8 py-6 text-2xl outline-none text-white font-mono tracking-widest" placeholder="CORE_ID_ACCESS" />
+              <button onClick={() => onSave(val)} className="px-14 py-6 bg-indigo-600 hover:bg-indigo-500 rounded-[2.5rem] font-black text-sm uppercase tracking-[0.4em] transition-all shadow-2xl">Authenticate</button>
+            </div>
+          </div>
+          <p className="text-indigo-200/20 text-sm italic font-medium leading-relaxed bg-white/5 p-8 rounded-[2.5rem] border border-white/5">Establish a secure satellite handshake using a valid WeatherStack API key. Default access keys are shared across the public matrix. Tier restrictions apply for temporal log requests.</p>
+        </div>
+      </motion.div>
     </div>
   );
 }
